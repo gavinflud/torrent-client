@@ -85,4 +85,14 @@ class BMap: HashMap<BString, BElement>(), BElement {
         return builder.append("e").toString()
     }
 
+    /**
+     * Utility function to get an element from the map by passing in the String key. You specify the type of the
+     * element you expect and it will return that type (assuming it exists in the map and is that type).
+     *
+     * @param key the String key identifying the element you want
+     */
+    inline fun <reified T: BElement> getEntry(key: String): T {
+        return this[BString(key)] as T
+    }
+
 }
