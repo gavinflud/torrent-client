@@ -1,7 +1,15 @@
 package com.gavinflood.torrentclient.bencode
 
+import com.google.common.collect.Iterators
+import com.google.common.collect.PeekingIterator
 import java.lang.RuntimeException
-import java.util.concurrent.atomic.AtomicInteger
+import java.lang.StringBuilder
+
+const val BENCODE_NUMBER_IDENTIFIER = 'i'
+const val BENCODE_LIST_IDENTIFIER = 'l'
+const val BENCODE_MAP_IDENTIFIER = 'd'
+const val BENCODE_END_IDENTIFIER = 'e'
+const val BENCODE_SEPARATOR = ':'
 
 /**
  * Decoder for bencoded content.
@@ -10,103 +18,120 @@ import java.util.concurrent.atomic.AtomicInteger
  */
 class BDecoder(private val encodedValue: String) {
 
+    val iterator: PeekingIterator<Char> = Iterators.peekingIterator(encodedValue.iterator())
+
     /**
      * Parse a bencoded string into the individual elements that make up it.
      *
-     * @return an array of bencoded elements
+     * @return a bencode element
      */
-    fun parse(): Array<BElement> {
-        val index = AtomicInteger(0)
-        val elements = arrayListOf<BElement>()
-
-        while (index.get() < encodedValue.length) {
-            elements.add(read(index))
-        }
-
-        return elements.toTypedArray()
+    fun parse(): BElement {
+        return read()
     }
 
     /**
      * Read in a bencoded element.
      *
-     * @param index the index in the bencoded string to start at
      * @return a bencoded element
      */
-    private fun read(index: AtomicInteger): BElement {
-        val validStringValues = (0..9).map { num -> Character.forDigit(num, 10) }
-
-        return when (encodedValue[index.get()]) {
-            in validStringValues -> toBString(index)
-            'i' -> toBNumber(index)
-            'l' -> toBList(index)
-            'd' -> toBMap(index)
-            else -> throw RuntimeException("Unrecognized type '${encodedValue[index.get()]}' at index ${index.get()}")
+    private fun read(): BElement {
+        if (iterator.hasNext()) {
+            return when (val nextChar = iterator.peek()) {
+                in '0'..'9' -> toBString()
+                BENCODE_NUMBER_IDENTIFIER -> toBNumber()
+                BENCODE_LIST_IDENTIFIER -> toBList()
+                BENCODE_MAP_IDENTIFIER -> toBMap()
+                else -> throw RuntimeException("Unrecognized type '$nextChar'")
+            }
         }
+
+        throw RuntimeException("No content")
     }
 
     /**
      * Read in a bencoded string.
      *
-     * @param index the index in the bencoded string to start at
      * @return a bencoded string
      */
-    private fun toBString(index: AtomicInteger): BString {
-        val colonIndex = encodedValue.indexOf(":", index.get())
-        val length = encodedValue.substring(index.get() until colonIndex).toInt()
-        index.set(colonIndex + 1)
-        val value = encodedValue.substring(index.get(), index.get() + length)
-        index.set(index.get() + length)
-        return BString(value)
+    private fun toBString(): BString {
+        val builder = StringBuilder()
+
+        while (iterator.peek().isDigit()) {
+            builder.append(iterator.next())
+        }
+
+        val length = builder.toString().toInt()
+        iterator
+            .skip(BENCODE_SEPARATOR)
+            .apply {
+                val charArray = CharArray(length)
+
+                for (i in 0 until length) {
+                    charArray[i] = iterator.next()
+                }
+
+                return BString(String(charArray))
+            }
     }
 
     /**
      * Read in a bencoded number.
      *
-     * @param index the index in the bencoded string to start at
      * @return a bencoded number
      */
-    private fun toBNumber(index: AtomicInteger): BNumber {
-        index.set(index.get() + 1)
-        val endIndex = encodedValue.indexOf('e', index.get())
-        val value = encodedValue.substring(index.get(), endIndex).toInt()
-        index.set(endIndex + 1)
-        return BNumber(value)
+    private fun toBNumber(): BNumber {
+        iterator
+            .skip(BENCODE_NUMBER_IDENTIFIER)
+            .apply {
+                val builder = StringBuilder()
+
+                while (iterator.peek() != BENCODE_END_IDENTIFIER) {
+                    builder.append(iterator.next())
+                }
+
+                iterator.next()
+                return BNumber(builder.toString().toInt())
+            }
     }
 
     /**
      * Read in a bencoded list.
      *
-     * @param index the index in the bencoded string to start at
      * @return a bencoded list of bencoded elements
      */
-    private fun toBList(index: AtomicInteger): BList {
-        index.set(index.get() + 1)
-        val list = BList()
+    private fun toBList(): BList {
+        iterator
+            .skip(BENCODE_LIST_IDENTIFIER)
+            .apply {
+                val list = BList()
 
-        while (encodedValue[index.get()] != 'e') {
-            list.add(read(index))
-        }
+                while (iterator.peek() != BENCODE_END_IDENTIFIER) {
+                    list.add(read())
+                }
 
-        index.set(index.get() + 1)
-        return list
+                iterator.next()
+                return list
+            }
     }
 
     /**
      * Read in a bencoded map (dictionary).
      *
-     * @param index the index in the bencoded string to start at
      * @return a bencoded map of bencoded element entries
      */
-    private fun toBMap(index: AtomicInteger): BMap {
-        index.set(index.get() + 1)
-        val map = BMap()
+    private fun toBMap(): BMap {
+        iterator
+            .skip(BENCODE_MAP_IDENTIFIER)
+            .apply {
+                val map = BMap()
 
-        while (encodedValue[index.get()] != 'e') {
-            map[toBString(index)] = read(index)
-        }
+                while (iterator.peek() != BENCODE_END_IDENTIFIER) {
+                    map[toBString()] = read()
+                }
 
-        index.set(index.get() + 1)
-        return map
+                iterator.next()
+                return map
+            }
     }
 
 }
