@@ -1,137 +1,143 @@
 package com.gavinflood.torrentclient.bencode
 
-import com.google.common.collect.Iterators
-import com.google.common.collect.PeekingIterator
 import java.lang.RuntimeException
-import java.lang.StringBuilder
 
-const val BENCODE_NUMBER_IDENTIFIER = 'i'
-const val BENCODE_LIST_IDENTIFIER = 'l'
-const val BENCODE_MAP_IDENTIFIER = 'd'
-const val BENCODE_END_IDENTIFIER = 'e'
-const val BENCODE_SEPARATOR = ':'
+const val BENCODE_NUMBER_IDENTIFIER = 'i'.toByte()
+const val BENCODE_LIST_IDENTIFIER = 'l'.toByte()
+const val BENCODE_MAP_IDENTIFIER = 'd'.toByte()
+const val BENCODE_END_IDENTIFIER = 'e'.toByte()
+const val INITIAL_OFFSET = 0
+const val INFO_KEY = "info"
 
 /**
  * Decoder for bencoded content.
  *
- * @param encodedValue The bencoded string to be decoded
+ * @param encodedBytes The bencoded byte array to be decoded
  */
-class BDecoder(private val encodedValue: String) {
-
-    val iterator: PeekingIterator<Char> = Iterators.peekingIterator(encodedValue.iterator())
+class BDecoder(private val encodedBytes: ByteArray) {
 
     /**
-     * Parse a bencoded string into the individual elements that make up it.
+     * Parse a bencoded byte array into the individual elements that make up it.
      *
      * @return a bencode element
      */
     fun parse(): BElement {
-        return read()
+        return read(INITIAL_OFFSET).element
     }
 
     /**
      * Read in a bencoded element.
      *
-     * @return a bencoded element
+     * @param offset the index at which to start decoding
+     * @return the resulting offset with the parsed element
      */
-    private fun read(): BElement {
-        if (iterator.hasNext()) {
-            return when (val nextChar = iterator.peek()) {
-                in '0'..'9' -> toBString()
-                BENCODE_NUMBER_IDENTIFIER -> toBNumber()
-                BENCODE_LIST_IDENTIFIER -> toBList()
-                BENCODE_MAP_IDENTIFIER -> toBMap()
-                else -> throw RuntimeException("Unrecognized type '$nextChar'")
-            }
-        }
+    private fun read(offset: Int): ParseResult<BElement> {
+        val digitsAsBytes = ('0'..'9').map { it.toByte() }
 
-        throw RuntimeException("No content")
+        return when (encodedBytes[offset]) {
+            in digitsAsBytes -> toBString(offset)
+            BENCODE_NUMBER_IDENTIFIER -> toBNumber(offset)
+            BENCODE_LIST_IDENTIFIER -> toBList(offset)
+            BENCODE_MAP_IDENTIFIER -> toBMap(offset)
+            else -> throw RuntimeException("Unrecognized byte '${encodedBytes[offset].toChar()}'")
+        }
     }
 
     /**
      * Read in a bencoded string.
      *
-     * @return a bencoded string
+     * @param offset the index at which to start decoding
+     * @return the resulting offset with the parsed element
      */
-    private fun toBString(): BString {
-        val builder = StringBuilder()
+    private fun toBString(offset: Int): ParseResult<BString> {
+        var i = offset
+        val sizeBuffer = StringBuffer()
+        val digitsAsBytes = ('0'..'9').map { it.toByte() }
 
-        while (iterator.peek().isDigit()) {
-            builder.append(iterator.next())
+        while (encodedBytes[i] in digitsAsBytes) {
+            sizeBuffer.append(encodedBytes[i].toChar())
+            i++
         }
 
-        val length = builder.toString().toInt()
-        iterator
-            .skip(BENCODE_SEPARATOR)
-            .apply {
-                val charArray = CharArray(length)
+        i++
+        val size = sizeBuffer.toString().toInt()
+        val bytes = ByteArray(size)
+        System.arraycopy(encodedBytes, i, bytes, 0, bytes.size)
 
-                for (i in 0 until length) {
-                    charArray[i] = iterator.next()
-                }
-
-                return BString(String(charArray))
-            }
+        return ParseResult(i + size, BString(bytes))
     }
 
     /**
      * Read in a bencoded number.
      *
-     * @return a bencoded number
+     * @param offset the index at which to start decoding
+     * @return the resulting offset with the parsed number
      */
-    private fun toBNumber(): BNumber {
-        iterator
-            .skip(BENCODE_NUMBER_IDENTIFIER)
-            .apply {
-                val builder = StringBuilder()
+    private fun toBNumber(offset: Int): ParseResult<BNumber> {
+        var i = offset + 1
+        val buffer = StringBuffer()
 
-                while (iterator.peek() != BENCODE_END_IDENTIFIER) {
-                    builder.append(iterator.next())
-                }
+        while (encodedBytes[i] != BENCODE_END_IDENTIFIER && encodedBytes.size > i) {
+            buffer.append(encodedBytes[i].toChar())
+            i++
+        }
 
-                iterator.next()
-                return BNumber(builder.toString().toInt())
-            }
+        i++
+
+        return ParseResult(i, BNumber(buffer.toString().toLong()))
     }
 
     /**
      * Read in a bencoded list.
      *
-     * @return a bencoded list of bencoded elements
+     * @param offset the index at which to start decoding
+     * @return the resulting offset with the parsed list
      */
-    private fun toBList(): BList {
-        iterator
-            .skip(BENCODE_LIST_IDENTIFIER)
-            .apply {
-                val list = BList()
+    private fun toBList(offset: Int): ParseResult<BList> {
+        var i = offset + 1
+        val list = BList()
 
-                while (iterator.peek() != BENCODE_END_IDENTIFIER) {
-                    list.add(read())
-                }
+        while (encodedBytes[i] != BENCODE_END_IDENTIFIER) {
+            val result = read(i)
+            i = result.offset
+            list.add(result.element)
+        }
 
-                iterator.next()
-                return list
-            }
+        i++
+
+        return ParseResult(i, list)
     }
 
     /**
      * Read in a bencoded map (dictionary).
      *
-     * @return a bencoded map of bencoded element entries
+     * @param offset the index at which to start decoding
+     * @param isInfoMap indicates if this map is the info map that needs to be hashed for torrent files
+     * @return the resulting offset with the parsed map
      */
-    private fun toBMap(): BMap {
-        iterator
-            .skip(BENCODE_MAP_IDENTIFIER)
-            .apply {
-                val map = BMap()
+    private fun toBMap(offset: Int, isInfoMap: Boolean = false): ParseResult<BMap> {
+        var i = offset + 1
+        val map = BMap()
 
-                while (iterator.peek() != BENCODE_END_IDENTIFIER) {
-                    map[toBString()] = read()
-                }
+        while (encodedBytes[i] != BENCODE_END_IDENTIFIER) {
+            val keyResult = toBString(i)
+            val key = String(keyResult.element.bytes)
+            val valueResult = if (key == INFO_KEY) toBMap(keyResult.offset, true) else read(keyResult.offset)
+            map[key] = valueResult.element
+            i = valueResult.offset
+        }
 
-                iterator.next()
-                return map
-            }
+        i++
+
+        if (isInfoMap) {
+            val infoBytes = ByteArray(i - offset)
+            System.arraycopy(encodedBytes, offset, infoBytes, 0, infoBytes.size)
+            map.bytes = infoBytes
+        }
+
+        return ParseResult(i, map)
     }
 
 }
+
+data class ParseResult<out T: BElement>(val offset: Int, val element: T)

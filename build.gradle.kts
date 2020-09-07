@@ -1,5 +1,5 @@
 plugins {
-    kotlin("jvm") version "1.3.72"
+    kotlin("jvm") version "1.4.0"
 }
 
 group = "com.gavinflood"
@@ -11,7 +11,6 @@ repositories {
 
 dependencies {
     implementation(kotlin("stdlib-jdk8"))
-    implementation("com.google.guava:guava:29.0-jre")
     testImplementation("org.junit.jupiter:junit-jupiter:5.6.2")
 }
 
